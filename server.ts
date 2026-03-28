@@ -85,7 +85,8 @@ async function startServer() {
     try {
       if (isSSE) {
         console.log("[MCP] Establishing SSE stream...");
-        // Set anti-buffering headers
+        // Set status and anti-buffering headers
+        res.status(200);
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache, no-transform');
         res.setHeader('Connection', 'keep-alive');
@@ -95,28 +96,27 @@ async function startServer() {
         // when the MCP SDK tries to set headers after we've already flushed them.
         const originalSetHeader = res.setHeader.bind(res);
         res.setHeader = (name: string, value: any) => {
-          if (res.headersSent) {
-            // console.log(`[MCP] Ignoring setHeader(${name}) - headers already sent`);
-            return res;
-          }
+          if (res.headersSent) return res;
           return originalSetHeader(name, value);
         };
 
         const originalWriteHead = res.writeHead.bind(res);
         res.writeHead = (statusCode: number, ...args: any[]) => {
-          if (res.headersSent) {
-            // console.log(`[MCP] Ignoring writeHead(${statusCode}) - headers already sent`);
-            return res;
-          }
+          if (res.headersSent) return res;
           return originalWriteHead(statusCode, ...args);
         };
 
         // Flush headers immediately to open the connection and prevent timeouts
         res.flushHeaders();
         
-        // Send an initial heartbeat/comment to force the proxy to flush
-        res.write(": connected\n\n");
+        // Send a single newline to ensure the proxy flushes without confusing the client
+        res.write("\n");
       }
+      
+      // Add error handler to prevent crashes on abrupt disconnects
+      res.on('error', (err: any) => {
+        console.error("[MCP] Response stream error:", err);
+      });
       
       await transport.handleRequest(req, res, req.body);
     } catch (error) {
