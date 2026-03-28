@@ -64,8 +64,14 @@ async function startServer() {
     console.error("Failed to connect proxy server to transport:", error);
   });
 
-  // 4. MCP Route - MUST be before express.json() to handle raw streams if needed
-  // and before any static/catch-all routes
+  // 4. MCP Routes
+  
+  // Simple ping endpoint for testing reachability without starting an SSE stream
+  // MUST be before the general mcpHandler
+  app.get("/mcp/ping", (req, res) => {
+    res.json({ status: "ok", message: "MCP endpoint is reachable" });
+  });
+
   const mcpHandler = async (req: any, res: any) => {
     const acceptHeader = req.headers.accept || "";
     console.log(`[MCP] ${req.method} ${req.url} - Accept: ${acceptHeader}`);
@@ -132,22 +138,25 @@ async function startServer() {
     }
   };
 
-  // Modern endpoint
-  app.all(["/mcp", "/mcp/", "/api/mcp"], mcpHandler);
+  // Modern endpoint - use exact paths to avoid catching sub-routes
+  app.all(/^\/mcp\/?$/, mcpHandler);
+  app.all("/api/mcp", mcpHandler);
 
-  // Handle root as MCP if requested via SSE
+  // Handle root as MCP if requested via SSE or by an AI agent
   app.get("/", (req, res, next) => {
-    if (req.headers.accept?.includes('text/event-stream') || req.query.transport === 'sse') {
-      console.log("[MCP] Root hit with SSE headers, handling as MCP");
+    const userAgent = req.headers['user-agent'] || "";
+    const isAiAgent = /Perplexity|Claude|GPT|Googlebot|Bingbot/i.test(userAgent);
+    const isSSE = req.headers.accept?.includes('text/event-stream') || req.query.transport === 'sse';
+
+    if (isSSE || (isAiAgent && !req.headers.accept?.includes('text/html'))) {
+      console.log(`[MCP] Root hit by ${isAiAgent ? 'AI Agent' : 'SSE client'}, handling as MCP`);
       return mcpHandler(req, res);
     }
     next();
   });
 
   // Simple ping endpoint for testing reachability without starting an SSE stream
-  app.get("/mcp/ping", (req, res) => {
-    res.json({ status: "ok", message: "MCP endpoint is reachable" });
-  });
+  // (Moved up)
 
   // Legacy redirects/aliases to prevent 404 -> HTML fallback
   app.all(["/sse", "/sse/"], (req, res) => {
@@ -290,15 +299,25 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
     
-    // Prevent HTML fallback for anything that looks like an MCP or API request
+    // CRITICAL: Prevent HTML fallback for anything that looks like an MCP or API request
+    // This MUST be before express.static to prevent it from serving index.html for these paths
     app.use((req, res, next) => {
-      if (req.url.startsWith('/mcp') || req.url.startsWith('/api') || req.headers.accept?.includes('application/json')) {
-        return res.status(404).json({ error: "Not Found", path: req.url });
+      const isMcpPath = req.url.startsWith('/mcp') || req.url.startsWith('/api') || req.url.startsWith('/sse');
+      const isJsonRequest = req.headers.accept?.includes('application/json');
+      
+      if (isMcpPath || isJsonRequest) {
+        // If we are here, it means no previous route handled this MCP/API path
+        return res.status(404).json({ 
+          error: "Not Found", 
+          message: "The requested MCP or API endpoint does not exist.",
+          path: req.url 
+        });
       }
       next();
     });
+
+    app.use(express.static(distPath));
 
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
