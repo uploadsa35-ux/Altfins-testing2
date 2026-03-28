@@ -18,6 +18,7 @@ async function startServer() {
   const PORT = process.env.PORT || 3000;
 
   app.use(cors());
+  app.use(express.json());
   
   // Request logging middleware
   app.use((req, res, next) => {
@@ -66,7 +67,8 @@ async function startServer() {
   // 4. MCP Route - MUST be before express.json() to handle raw streams if needed
   // and before any static/catch-all routes
   const mcpHandler = async (req: any, res: any) => {
-    console.log(`[MCP] ${req.method} ${req.url} - Accept: ${req.headers.accept}`);
+    const acceptHeader = req.headers.accept || "";
+    console.log(`[MCP] ${req.method} ${req.url} - Accept: ${acceptHeader}`);
     
     // Handle CORS preflight
     if (req.method === 'OPTIONS') {
@@ -76,17 +78,35 @@ async function startServer() {
       return;
     }
 
-    // Some clients might not send the correct Accept header for SSE
-    // If it's a GET request, we assume they want SSE
-    if (req.method === 'GET' && !req.headers.accept?.includes('text/event-stream')) {
-      console.log("[MCP] GET request without text/event-stream Accept header. Forcing it for compatibility.");
-      req.headers.accept = 'text/event-stream';
-    }
-
+    // Force SSE for GET requests to /mcp if it looks like a stream request
+    // or if the client is known to be an AI client that might have weird headers
+    const isSSE = req.method === 'GET' && (acceptHeader.includes('text/event-stream') || req.query.transport === 'sse');
+    
     try {
-      // Set a default content type to prevent HTML fallback
-      const isSSE = req.headers.accept?.includes('text/event-stream');
-      res.setHeader('Content-Type', isSSE ? 'text/event-stream' : 'application/json');
+      if (isSSE) {
+        console.log("[MCP] Establishing SSE stream...");
+        // Set anti-buffering headers
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache, no-transform');
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('X-Accel-Buffering', 'no'); // Disable proxy buffering
+        
+        // HACK: Override setHeader to prevent ERR_HTTP_HEADERS_SENT 
+        // when the MCP SDK tries to set Content-Type after we've flushed.
+        const originalSetHeader = res.setHeader.bind(res);
+        res.setHeader = (name: string, value: any) => {
+          if (res.headersSent && name.toLowerCase() === 'content-type') {
+            return res;
+          }
+          return originalSetHeader(name, value);
+        };
+
+        // Flush headers immediately to open the connection and prevent timeouts
+        res.flushHeaders();
+        
+        // Send an initial heartbeat/comment to force the proxy to flush
+        res.write(": connected\n\n");
+      }
       
       await transport.handleRequest(req, res, req.body);
     } catch (error) {
@@ -104,6 +124,11 @@ async function startServer() {
   // Modern endpoint
   app.all(["/mcp", "/mcp/"], mcpHandler);
 
+  // Simple ping endpoint for testing reachability without starting an SSE stream
+  app.get("/mcp/ping", (req, res) => {
+    res.json({ status: "ok", message: "MCP endpoint is reachable" });
+  });
+
   // Legacy redirects/aliases to prevent 404 -> HTML fallback
   app.all(["/sse", "/sse/"], (req, res) => {
     console.log("[MCP] Legacy /sse hit, redirecting to /mcp");
@@ -114,8 +139,6 @@ async function startServer() {
     console.log("[MCP] Legacy /messages hit, redirecting to /mcp");
     res.redirect(307, "/mcp");
   });
-
-  app.use(express.json());
 
   let cachedTools: any[] = [];
 

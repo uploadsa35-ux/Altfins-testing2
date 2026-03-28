@@ -47,37 +47,85 @@ export default function App() {
 
   const testConnection = async () => {
     setTesting(true);
-    setTestResult(null);
+    setTestResult({ ping: 'testing', sse: 'pending' });
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second total timeout
+
     try {
       const start = Date.now();
-      // Test with a GET request but with the correct Accept header for SSE
-      const response = await fetch("/mcp", {
-        method: "GET",
-        headers: {
-          "Accept": "text/event-stream"
+      
+      // Step 1: Test simple reachability with /mcp/ping
+      console.log("Testing ping...");
+      try {
+        const pingResponse = await fetch("/mcp/ping", { signal: controller.signal });
+        if (pingResponse.ok) {
+          const pingData = await pingResponse.json();
+          setTestResult(prev => ({ ...prev, ping: 'ok', pingData }));
+        } else {
+          setTestResult(prev => ({ ...prev, ping: 'error', pingError: `Status ${pingResponse.status}` }));
         }
-      });
-      const end = Date.now();
+      } catch (e: any) {
+        setTestResult(prev => ({ ...prev, ping: 'error', pingError: e.message }));
+      }
       
-      const contentType = response.headers.get("Content-Type") || "unknown";
-      const isHtml = contentType.includes("text/html");
-      const isSSE = contentType.includes("text/event-stream");
+      // Step 2: Test SSE headers with /mcp (Downstream)
+      console.log("Testing SSE stream...");
+      setTestResult(prev => ({ ...prev, sse: 'testing' }));
       
-      setTestResult({
-        ok: response.ok,
-        status: response.status,
-        contentType,
-        latency: end - start,
-        isHtml,
-        isSSE,
-        error: isHtml ? "Endpoint is returning HTML instead of MCP data. This is likely due to a routing issue or server error." : 
-               (!isSSE && response.ok) ? "Endpoint is reachable but did not return an SSE stream. This might be normal for some clients." : null
-      });
+      try {
+        const sseResponse = await fetch("/mcp", {
+          method: "GET",
+          headers: { "Accept": "text/event-stream" },
+          signal: controller.signal
+        });
+        
+        const contentType = sseResponse.headers.get("Content-Type") || "unknown";
+        const isSSE = contentType.includes("text/event-stream");
+        
+        // Abort the SSE stream immediately
+        controller.abort();
+
+        setTestResult(prev => ({ 
+          ...prev, 
+          sse: isSSE ? 'ok' : 'error',
+          sseType: contentType,
+          sseError: !isSSE ? "Endpoint reachable but didn't return text/event-stream." : null
+        }));
+      } catch (e: any) {
+        if (e.name === 'AbortError') {
+          setTestResult(prev => (prev?.sse === 'testing' ? { ...prev, sse: 'timeout' } : prev));
+        } else {
+          setTestResult(prev => ({ ...prev, sse: 'error', sseError: e.message }));
+        }
+      }
+
+      // Step 3: Test POST (Upstream / Streamable HTTP)
+      console.log("Testing Streamable HTTP POST...");
+      setTestResult(prev => ({ ...prev, post: 'testing' }));
+      try {
+        const postResponse = await fetch("/mcp", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }),
+          signal: controller.signal
+        });
+        
+        const end = Date.now();
+        setTestResult(prev => ({ 
+          ...prev, 
+          post: postResponse.ok ? 'ok' : 'error',
+          postStatus: postResponse.status,
+          latency: end - start
+        }));
+      } catch (e: any) {
+        setTestResult(prev => ({ ...prev, post: 'error', postError: e.message }));
+      }
+      
+      clearTimeout(timeoutId);
     } catch (error: any) {
-      setTestResult({
-        ok: false,
-        error: error.message || "Network error"
-      });
+      clearTimeout(timeoutId);
+      console.error("Global test error:", error);
     } finally {
       setTesting(false);
     }
@@ -205,20 +253,46 @@ export default function App() {
                 <motion.div 
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: 'auto' }}
-                  className={`p-4 rounded-xl border text-sm space-y-2 ${testResult.isHtml ? 'bg-red-500/10 border-red-500/20 text-red-400' : 'bg-green-500/10 border-green-500/20 text-green-400'}`}
+                  className="p-4 rounded-xl border border-white/10 bg-white/5 text-sm space-y-3"
                 >
-                  <div className="font-bold flex items-center justify-between">
-                    <span>{testResult.isHtml ? '❌ Connection Issue' : (testResult.isSSE ? '✅ MCP Stream Active' : '⚠️ Reachable (No Stream)')}</span>
-                    <span className="text-xs opacity-60 font-mono">{testResult.latency}ms</span>
+                  <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                    <span className="font-bold text-white/80">Diagnostic Results</span>
+                    {testResult.latency && <span className="text-xs font-mono text-white/40">{testResult.latency}ms</span>}
                   </div>
-                  <div className="grid grid-cols-2 gap-2 text-xs font-mono opacity-80">
-                    <div>Status: {testResult.status}</div>
-                    <div>Type: {testResult.contentType}</div>
+                  
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-white/60">Ping Reachability:</span>
+                      <span className={`font-mono text-xs ${testResult.ping === 'ok' ? 'text-green-400' : testResult.ping === 'testing' ? 'text-orange-400' : 'text-red-400'}`}>
+                        {testResult.ping === 'ok' ? '✅ SUCCESS' : testResult.ping === 'testing' ? '⏳ TESTING...' : `❌ FAILED (${testResult.pingError})`}
+                      </span>
+                    </div>
+                    
+                    <div className="flex items-center justify-between">
+                      <span className="text-white/60">MCP Stream (SSE):</span>
+                      <span className={`font-mono text-xs ${testResult.sse === 'ok' ? 'text-green-400' : testResult.sse === 'testing' ? 'text-orange-400' : testResult.sse === 'timeout' ? 'text-yellow-400' : 'text-red-400'}`}>
+                        {testResult.sse === 'ok' ? '✅ ACTIVE' : testResult.sse === 'testing' ? '⏳ TESTING...' : testResult.sse === 'timeout' ? '⚠️ TIMEOUT' : `❌ ERROR`}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between">
+                      <span className="text-white/60">Streamable HTTP (POST):</span>
+                      <span className={`font-mono text-xs ${testResult.post === 'ok' ? 'text-green-400' : testResult.post === 'testing' ? 'text-orange-400' : 'text-red-400'}`}>
+                        {testResult.post === 'ok' ? '✅ SUPPORTED' : testResult.post === 'testing' ? '⏳ TESTING...' : `❌ FAILED`}
+                      </span>
+                    </div>
                   </div>
-                  {testResult.error && (
-                    <p className="text-xs leading-relaxed border-t border-current/10 pt-2 mt-2">
-                      {testResult.error}
-                    </p>
+
+                  {testResult.sseError && (
+                    <div className={`text-xs p-2 rounded bg-black/20 border ${testResult.sse === 'timeout' ? 'border-yellow-500/20 text-yellow-400/80' : 'border-red-500/20 text-red-400/80'}`}>
+                      {testResult.sseError}
+                    </div>
+                  )}
+
+                  {testResult.isHtml && (
+                    <div className="text-[10px] uppercase tracking-wider font-bold text-red-500 bg-red-500/10 p-1 text-center rounded">
+                      Critical: Server is returning HTML
+                    </div>
                   )}
                 </motion.div>
               )}
