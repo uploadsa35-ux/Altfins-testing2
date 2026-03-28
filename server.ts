@@ -18,7 +18,12 @@ async function startServer() {
   const PORT = process.env.PORT || 3000;
 
   app.use(cors());
-  app.use(express.json());
+  
+  // Request logging middleware
+  app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    next();
+  });
 
   // 1. Initialize MCP Client to connect to altFINS
   const altfinsApiKey = process.env.ALTFINS_API_KEY;
@@ -51,6 +56,30 @@ async function startServer() {
   
   // 3. Initialize Streamable HTTP Server Transport for the Proxy
   const transport = new StreamableHTTPServerTransport();
+
+  // Connect the server to the transport immediately
+  // This ensures the transport is ready to handle requests even if the bridge is still setting up
+  proxyServer.connect(transport).catch(error => {
+    console.error("Failed to connect proxy server to transport:", error);
+  });
+
+  // 4. MCP Route - MUST be before express.json() to handle raw streams if needed
+  // and before any static/catch-all routes
+  app.all("/mcp", async (req, res) => {
+    console.log(`Incoming MCP request: ${req.method} ${req.url}`);
+    try {
+      // If express.json() hasn't run yet, req.body might be undefined.
+      // StreamableHTTPServerTransport can handle raw streams.
+      await transport.handleRequest(req, res, req.body);
+    } catch (error) {
+      console.error("Error handling MCP request:", error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Internal Server Error", details: String(error) });
+      }
+    }
+  });
+
+  app.use(express.json());
 
   let cachedTools: any[] = [];
 
@@ -121,31 +150,22 @@ async function startServer() {
       });
 
       console.log("Bridge setup complete.");
-      
-      // Connect the server to the transport
-      await proxyServer.connect(transport);
-      console.log("Proxy server connected to transport.");
     } catch (error) {
       console.error("Failed to setup bridge:", error);
     }
   }
 
   // Routes for external AI clients
-  app.all("/mcp", async (req, res) => {
-    try {
-      await transport.handleRequest(req, res, req.body);
-    } catch (error) {
-      console.error("Error handling MCP request:", error);
-      res.status(500).send("Internal Server Error");
-    }
-  });
+  // (Moved to top)
 
   // Health check
   app.get("/api/health", (req, res) => {
     res.json({ 
       status: "ok", 
       connectedToAltfins: !!altfinsClient,
-      toolsCount: cachedTools.length 
+      apiKeySet: !!altfinsApiKey,
+      toolsCount: cachedTools.length,
+      mcpEndpoint: "/mcp"
     });
   });
 

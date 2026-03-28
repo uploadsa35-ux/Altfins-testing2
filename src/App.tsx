@@ -102,13 +102,16 @@ export default function App() {
                   <Shield className="w-4 h-4" />
                   altFINS
                 </div>
-                <div className={`w-2 h-2 rounded-full ${status?.connectedToAltfins ? 'bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]' : 'bg-orange-500'}`} />
+                <div className="flex gap-1">
+                  <div className={`w-2 h-2 rounded-full ${status?.connectedToAltfins ? 'bg-green-500' : 'bg-orange-500'}`} />
+                  <div className={`w-2 h-2 rounded-full ${status?.apiKeySet ? 'bg-green-500' : 'bg-red-500'}`} />
+                </div>
               </div>
               <div className="text-3xl font-light">
                 {status?.connectedToAltfins ? 'Connected' : 'Disconnected'}
               </div>
               <p className="text-sm text-white/40 leading-relaxed">
-                Secure bridge to altFINS via Streamable HTTP MCP transport.
+                {status?.apiKeySet ? 'API Key is configured.' : 'API Key is MISSING in environment.'}
               </p>
             </motion.div>
 
