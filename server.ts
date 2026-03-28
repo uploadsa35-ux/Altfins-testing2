@@ -90,7 +90,8 @@ async function startServer() {
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache, no-transform');
         res.setHeader('Connection', 'keep-alive');
-        res.setHeader('X-Accel-Buffering', 'no'); // Disable proxy buffering
+        res.setHeader('X-Accel-Buffering', 'no'); // Disable Nginx proxy buffering
+        res.setHeader('X-LiteSpeed-No-Buffering', '1'); // Disable LiteSpeed buffering (common on Hostinger)
         
         // HACK: Override header methods to prevent ERR_HTTP_HEADERS_SENT 
         // when the MCP SDK tries to set headers after we've already flushed them.
