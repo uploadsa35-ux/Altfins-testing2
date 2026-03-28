@@ -78,9 +78,9 @@ async function startServer() {
       return;
     }
 
-    // Force SSE for GET requests to /mcp if it looks like a stream request
-    // or if the client is known to be an AI client that might have weird headers
-    const isSSE = req.method === 'GET' && (acceptHeader.includes('text/event-stream') || req.query.transport === 'sse');
+    // Aggressive SSE detection for GET requests
+    // If it's a GET request to an MCP endpoint, it's almost certainly an SSE request
+    const isSSE = req.method === 'GET';
     
     try {
       if (isSSE) {
@@ -91,14 +91,24 @@ async function startServer() {
         res.setHeader('Connection', 'keep-alive');
         res.setHeader('X-Accel-Buffering', 'no'); // Disable proxy buffering
         
-        // HACK: Override setHeader to prevent ERR_HTTP_HEADERS_SENT 
-        // when the MCP SDK tries to set Content-Type after we've flushed.
+        // HACK: Override header methods to prevent ERR_HTTP_HEADERS_SENT 
+        // when the MCP SDK tries to set headers after we've already flushed them.
         const originalSetHeader = res.setHeader.bind(res);
         res.setHeader = (name: string, value: any) => {
-          if (res.headersSent && name.toLowerCase() === 'content-type') {
+          if (res.headersSent) {
+            // console.log(`[MCP] Ignoring setHeader(${name}) - headers already sent`);
             return res;
           }
           return originalSetHeader(name, value);
+        };
+
+        const originalWriteHead = res.writeHead.bind(res);
+        res.writeHead = (statusCode: number, ...args: any[]) => {
+          if (res.headersSent) {
+            // console.log(`[MCP] Ignoring writeHead(${statusCode}) - headers already sent`);
+            return res;
+          }
+          return originalWriteHead(statusCode, ...args);
         };
 
         // Flush headers immediately to open the connection and prevent timeouts
@@ -122,7 +132,16 @@ async function startServer() {
   };
 
   // Modern endpoint
-  app.all(["/mcp", "/mcp/"], mcpHandler);
+  app.all(["/mcp", "/mcp/", "/api/mcp"], mcpHandler);
+
+  // Handle root as MCP if requested via SSE
+  app.get("/", (req, res, next) => {
+    if (req.headers.accept?.includes('text/event-stream') || req.query.transport === 'sse') {
+      console.log("[MCP] Root hit with SSE headers, handling as MCP");
+      return mcpHandler(req, res);
+    }
+    next();
+  });
 
   // Simple ping endpoint for testing reachability without starting an SSE stream
   app.get("/mcp/ping", (req, res) => {
@@ -271,6 +290,15 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
+    
+    // Prevent HTML fallback for anything that looks like an MCP or API request
+    app.use((req, res, next) => {
+      if (req.url.startsWith('/mcp') || req.url.startsWith('/api') || req.headers.accept?.includes('application/json')) {
+        return res.status(404).json({ error: "Not Found", path: req.url });
+      }
+      next();
+    });
+
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });

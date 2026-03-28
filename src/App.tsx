@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
-import { Activity, Shield, Zap, ExternalLink, RefreshCw, Box } from "lucide-react";
+import { Activity, Shield, Zap, ExternalLink, RefreshCw, Box, Info, Copy } from "lucide-react";
 
 export default function App() {
   const [status, setStatus] = useState<any>(null);
@@ -238,15 +238,46 @@ export default function App() {
                 Use this URL in your AI client (Cursor, Perplexity, etc.). This endpoint supports both the modern Streamable HTTP transport and standard SSE.
               </p>
               
-              <div className="pt-2">
+              <div className="pt-2 flex flex-col gap-4">
                 <button
                   onClick={testConnection}
                   disabled={testing}
-                  className="flex items-center gap-2 px-3 py-1.5 bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 rounded-lg text-xs font-medium text-orange-400 transition-all active:scale-95 disabled:opacity-50"
+                  className="flex items-center gap-2 px-3 py-1.5 bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 rounded-lg text-xs font-medium text-orange-400 transition-all active:scale-95 disabled:opacity-50 w-fit"
                 >
                   <Activity className={`w-3 h-3 ${testing ? 'animate-spin' : ''}`} />
                   {testing ? 'Testing Endpoint...' : 'Test MCP Endpoint'}
                 </button>
+
+                {/* Perplexity Specific Guide */}
+                <motion.div 
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="p-4 rounded-xl border border-blue-500/20 bg-blue-500/5 space-y-3"
+                >
+                  <div className="flex items-center gap-2 text-blue-400">
+                    <Info className="w-4 h-4" />
+                    <span className="font-bold text-sm">Perplexity Setup Guide</span>
+                  </div>
+                  <p className="text-xs text-white/60 leading-relaxed">
+                    If you see <code className="text-red-400 bg-red-400/10 px-1 rounded">FETCHER_HTML_STATUS_CODE_ERROR</code> in Perplexity, make sure you are using the exact SSE URL below:
+                  </p>
+                  <div className="flex items-center gap-2 p-2 bg-black/40 rounded border border-white/10 group">
+                    <code className="text-[10px] text-blue-300 flex-1 truncate">{window.location.origin}/mcp</code>
+                    <button 
+                      onClick={() => {
+                        navigator.clipboard.writeText(`${window.location.origin}/mcp`);
+                      }}
+                      className="p-1 hover:bg-white/10 rounded transition-colors"
+                    >
+                      <Copy className="w-3 h-3 text-white/40 group-hover:text-white/80" />
+                    </button>
+                  </div>
+                  <ul className="text-[10px] text-white/40 space-y-1 list-disc pl-4">
+                    <li>Ensure the URL ends in <code className="text-white/60">/mcp</code></li>
+                    <li>Perplexity requires a publicly accessible URL (this shared URL is public)</li>
+                    <li>The server is configured to bypass buffering for Perplexity</li>
+                  </ul>
+                </motion.div>
               </div>
 
               {testResult && (
