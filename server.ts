@@ -5,7 +5,7 @@ import { createServer as createViteServer } from "vite";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { 
   CallToolRequestSchema, 
   CallToolResultSchema,
@@ -48,9 +48,9 @@ async function startServer() {
       },
     }
   );
-
-  // Store SSE transports for session management
-  const transports = new Map<string, SSEServerTransport>();
+  
+  // 3. Initialize Streamable HTTP Server Transport for the Proxy
+  const transport = new StreamableHTTPServerTransport();
 
   let cachedTools: any[] = [];
 
@@ -121,41 +121,23 @@ async function startServer() {
       });
 
       console.log("Bridge setup complete.");
+      
+      // Connect the server to the transport
+      await proxyServer.connect(transport);
+      console.log("Proxy server connected to transport.");
     } catch (error) {
       console.error("Failed to setup bridge:", error);
     }
   }
 
   // Routes for external AI clients
-  app.get("/sse", async (req, res) => {
-    console.log("New SSE connection request");
-    const transport = new SSEServerTransport("/messages", res);
-    
-    await proxyServer.connect(transport);
-    
-    const sessionId = transport.sessionId;
-    if (sessionId) {
-      transports.set(sessionId, transport);
-      console.log(`Session ${sessionId} connected`);
-      
-      req.on("close", () => {
-        transports.delete(sessionId);
-        console.log(`Session ${sessionId} disconnected`);
-      });
+  app.all("/mcp", async (req, res) => {
+    try {
+      await transport.handleRequest(req, res, req.body);
+    } catch (error) {
+      console.error("Error handling MCP request:", error);
+      res.status(500).send("Internal Server Error");
     }
-  });
-
-  app.post("/messages", async (req, res) => {
-    const sessionId = req.query.sessionId as string;
-    const transport = transports.get(sessionId);
-
-    if (!transport) {
-      console.error(`Session ${sessionId} not found`);
-      res.status(404).send("Session not found");
-      return;
-    }
-
-    await transport.handlePostMessage(req, res);
   });
 
   // Health check
@@ -191,10 +173,20 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", async () => {
-    console.log(`MCP Proxy Server listening on http://0.0.0.0:${PORT}`);
-    await setupBridge();
-  });
+  if (typeof PORT === 'string' && (PORT.includes('/') || PORT.includes('\\'))) {
+    // Unix socket or Windows named pipe
+    app.listen(PORT, async () => {
+      console.log(`MCP Proxy Server listening on socket: ${PORT}`);
+      await setupBridge();
+    });
+  } else {
+    // Network port
+    const portNum = Number(PORT);
+    app.listen(portNum, "0.0.0.0", async () => {
+      console.log(`MCP Proxy Server listening on http://0.0.0.0:${portNum}`);
+      await setupBridge();
+    });
+  }
 }
 
 startServer();

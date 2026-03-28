@@ -138,17 +138,14 @@ export default function App() {
             <h2 className="text-xl font-semibold">Connection Details</h2>
             <div className="space-y-4">
               <div className="flex flex-col gap-1">
-                <label className="text-xs text-white/30 uppercase tracking-widest font-bold">SSE Endpoint</label>
+                <label className="text-xs text-white/30 uppercase tracking-widest font-bold">MCP Endpoint (Streamable HTTP / SSE)</label>
                 <div className="flex items-center gap-2 p-3 bg-black/40 rounded-lg border border-white/5 font-mono text-sm text-orange-400">
-                  {window.location.origin}/sse
+                  {window.location.origin}/mcp
                 </div>
               </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-white/30 uppercase tracking-widest font-bold">Messages Endpoint</label>
-                <div className="flex items-center gap-2 p-3 bg-black/40 rounded-lg border border-white/5 font-mono text-sm text-orange-400">
-                  {window.location.origin}/messages
-                </div>
-              </div>
+              <p className="text-sm text-white/40 leading-relaxed">
+                Use this URL in your AI client (Cursor, Perplexity, etc.). This endpoint supports both the modern Streamable HTTP transport and standard SSE.
+              </p>
             </div>
             
             <div className="pt-4 flex items-center gap-4">
