@@ -6,6 +6,8 @@ export default function App() {
   const [status, setStatus] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [testResult, setTestResult] = useState<any>(null);
+  const [testing, setTesting] = useState(false);
 
   const fetchStatus = async () => {
     try {
@@ -40,6 +42,44 @@ export default function App() {
       alert("Error refreshing tools. Check console.");
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const testConnection = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const start = Date.now();
+      // Test with a GET request but with the correct Accept header for SSE
+      const response = await fetch("/mcp", {
+        method: "GET",
+        headers: {
+          "Accept": "text/event-stream"
+        }
+      });
+      const end = Date.now();
+      
+      const contentType = response.headers.get("Content-Type") || "unknown";
+      const isHtml = contentType.includes("text/html");
+      const isSSE = contentType.includes("text/event-stream");
+      
+      setTestResult({
+        ok: response.ok,
+        status: response.status,
+        contentType,
+        latency: end - start,
+        isHtml,
+        isSSE,
+        error: isHtml ? "Endpoint is returning HTML instead of MCP data. This is likely due to a routing issue or server error." : 
+               (!isSSE && response.ok) ? "Endpoint is reachable but did not return an SSE stream. This might be normal for some clients." : null
+      });
+    } catch (error: any) {
+      setTestResult({
+        ok: false,
+        error: error.message || "Network error"
+      });
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -149,6 +189,39 @@ export default function App() {
               <p className="text-sm text-white/40 leading-relaxed">
                 Use this URL in your AI client (Cursor, Perplexity, etc.). This endpoint supports both the modern Streamable HTTP transport and standard SSE.
               </p>
+              
+              <div className="pt-2">
+                <button
+                  onClick={testConnection}
+                  disabled={testing}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 rounded-lg text-xs font-medium text-orange-400 transition-all active:scale-95 disabled:opacity-50"
+                >
+                  <Activity className={`w-3 h-3 ${testing ? 'animate-spin' : ''}`} />
+                  {testing ? 'Testing Endpoint...' : 'Test MCP Endpoint'}
+                </button>
+              </div>
+
+              {testResult && (
+                <motion.div 
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  className={`p-4 rounded-xl border text-sm space-y-2 ${testResult.isHtml ? 'bg-red-500/10 border-red-500/20 text-red-400' : 'bg-green-500/10 border-green-500/20 text-green-400'}`}
+                >
+                  <div className="font-bold flex items-center justify-between">
+                    <span>{testResult.isHtml ? '❌ Connection Issue' : (testResult.isSSE ? '✅ MCP Stream Active' : '⚠️ Reachable (No Stream)')}</span>
+                    <span className="text-xs opacity-60 font-mono">{testResult.latency}ms</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs font-mono opacity-80">
+                    <div>Status: {testResult.status}</div>
+                    <div>Type: {testResult.contentType}</div>
+                  </div>
+                  {testResult.error && (
+                    <p className="text-xs leading-relaxed border-t border-current/10 pt-2 mt-2">
+                      {testResult.error}
+                    </p>
+                  )}
+                </motion.div>
+              )}
             </div>
             
             <div className="pt-4 flex items-center gap-4">

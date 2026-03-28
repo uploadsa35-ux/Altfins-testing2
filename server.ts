@@ -65,18 +65,54 @@ async function startServer() {
 
   // 4. MCP Route - MUST be before express.json() to handle raw streams if needed
   // and before any static/catch-all routes
-  app.all("/mcp", async (req, res) => {
-    console.log(`Incoming MCP request: ${req.method} ${req.url}`);
+  const mcpHandler = async (req: any, res: any) => {
+    console.log(`[MCP] ${req.method} ${req.url} - Accept: ${req.headers.accept}`);
+    
+    // Handle CORS preflight
+    if (req.method === 'OPTIONS') {
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, X-Api-Key');
+      res.status(204).end();
+      return;
+    }
+
+    // Some clients might not send the correct Accept header for SSE
+    // If it's a GET request, we assume they want SSE
+    if (req.method === 'GET' && !req.headers.accept?.includes('text/event-stream')) {
+      console.log("[MCP] GET request without text/event-stream Accept header. Forcing it for compatibility.");
+      req.headers.accept = 'text/event-stream';
+    }
+
     try {
-      // If express.json() hasn't run yet, req.body might be undefined.
-      // StreamableHTTPServerTransport can handle raw streams.
+      // Set a default content type to prevent HTML fallback
+      const isSSE = req.headers.accept?.includes('text/event-stream');
+      res.setHeader('Content-Type', isSSE ? 'text/event-stream' : 'application/json');
+      
       await transport.handleRequest(req, res, req.body);
     } catch (error) {
-      console.error("Error handling MCP request:", error);
+      console.error("[MCP] Error handling request:", error);
       if (!res.headersSent) {
-        res.status(500).json({ error: "Internal Server Error", details: String(error) });
+        res.status(500).json({ 
+          error: "Internal Server Error", 
+          details: String(error),
+          path: req.url
+        });
       }
     }
+  };
+
+  // Modern endpoint
+  app.all(["/mcp", "/mcp/"], mcpHandler);
+
+  // Legacy redirects/aliases to prevent 404 -> HTML fallback
+  app.all(["/sse", "/sse/"], (req, res) => {
+    console.log("[MCP] Legacy /sse hit, redirecting to /mcp");
+    res.redirect(307, "/mcp");
+  });
+  
+  app.all(["/messages", "/messages/"], (req, res) => {
+    console.log("[MCP] Legacy /messages hit, redirecting to /mcp");
+    res.redirect(307, "/mcp");
   });
 
   app.use(express.json());
@@ -90,11 +126,35 @@ async function startServer() {
         { method: "tools/list" },
         ListToolsResultSchema
       );
-      cachedTools = result.tools;
-      console.log(`Cached ${cachedTools.length} tools.`);
+      
+      const tools = result.tools || [];
+      const validTools = [];
+      
+      console.log(`Received ${tools.length} tools from altFINS. Validating...`);
+      
+      for (const tool of tools) {
+        try {
+          if (!tool.name) {
+            throw new Error("Tool definition is missing a 'name' field.");
+          }
+          // Basic validation: ensure we have a name and it's a string
+          if (typeof tool.name !== 'string') {
+            throw new Error(`Tool name must be a string, received: ${typeof tool.name}`);
+          }
+          
+          validTools.push(tool);
+          console.log(`  [OK] Registered tool: ${tool.name}`);
+        } catch (toolError: any) {
+          console.error(`  [ERROR] Failed to register tool ${tool?.name || 'unknown'}:`, toolError.message);
+          // Continue with the rest of the tools as requested
+        }
+      }
+      
+      cachedTools = validTools;
+      console.log(`Successfully cached ${cachedTools.length} tools for proxying.`);
       return cachedTools;
     } catch (error) {
-      console.error("Failed to fetch tools:", error);
+      console.error("Critical failure fetching tools from altFINS:", error);
       throw error;
     }
   }
