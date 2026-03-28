@@ -1,0 +1,5 @@
+{
+  "name": "altFINS MCP Proxy Bridge",
+  "description": "A Node.js Express application that acts as an MCP Proxy/Bridge Server for altFINS Crypto Market Data.",
+  "requestFramePermissions": []
+}
